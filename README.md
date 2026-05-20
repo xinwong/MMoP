@@ -1,4 +1,4 @@
-# Multimodal Adversarial Prompt Tuning
+# Multimodal Mixture of Prompt
 
 This repository implements Multimodal Adversarial Prompt Tuning, a technique for improving the adversarial robustness of pre-trained Vision-Language models.
 
