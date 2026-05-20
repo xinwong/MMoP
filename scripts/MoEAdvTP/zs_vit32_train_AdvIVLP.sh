@@ -38,7 +38,7 @@ SEED=1
 EPOCHS=(100)  # ($(seq 10 10 100)) Generate sequence from 0 to 100 with steps of 10 
 ATTACKS=("pgd" "auto" "di" "ti" "cw")
 
-CFG=MoT_vit_b32_c2_ep100_batch32_2ctx_9depth
+CFG=vit_b32_c2_ep100_batch32_2ctx_9depth
 SHOTS=16
 
 for ATTACK in "${ATTACKS[@]}"; do
