@@ -10,7 +10,7 @@ SHOTS=16
 
 
 
-DIR=./output/train/MoT/${DATASET}/${TRAINER}/${CFG}_${SHOTS}shots/seed${SEED}
+DIR=./output/train/${DATASET}/${TRAINER}/${CFG}_${SHOTS}shots/seed${SEED}
 if [ -d "$DIR" ]; then
     echo "Results are available in ${DIR}."
 else
@@ -56,7 +56,7 @@ for ATTACK in "${ATTACKS[@]}"; do
                 --dataset-config-file configs/datasets/${DATASET}.yaml \
                 --config-file configs/trainers/${TRAINER}/${CFG}.yaml \
                 --output-dir ${DIR} \
-                --model-dir ./output/train/MoT/imagenet/${TRAINER}/${CFG}_${SHOTS}shots/seed${SEED} \
+                --model-dir ./output/train/imagenet/${TRAINER}/${CFG}_${SHOTS}shots/seed${SEED} \
                 --load-epoch ${EPOCH} \
                 --attacks ${ATTACK} \
                 --eval-only
