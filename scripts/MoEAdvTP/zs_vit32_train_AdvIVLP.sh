@@ -21,7 +21,7 @@ else
     --seed ${SEED} \
     --trainer ${TRAINER} \
     --dataset-config-file configs/datasets/${DATASET}.yaml \
-    --config-file configs/trainers/${TRAINER}/${CFG}.yaml \
+    --config-file configs/trainers/MoEAdvTP/${CFG}.yaml \
     --output-dir ${DIR} \
     DATASET.NUM_SHOTS ${SHOTS}
 fi
@@ -55,7 +55,7 @@ for ATTACK in "${ATTACKS[@]}"; do
                 --seed ${SEED} \
                 --trainer ${TRAINER} \
                 --dataset-config-file configs/datasets/${DATASET}.yaml \
-                --config-file configs/trainers/${TRAINER}/${CFG}.yaml \
+                --config-file configs/trainers/MoEAdvTP/${CFG}.yaml \
                 --output-dir ${DIR} \
                 --model-dir ./output2025/train/MoT/imagenet/${TRAINER}/${CFG}_${SHOTS}shots/seed${SEED} \
                 --load-epoch ${EPOCH} \
