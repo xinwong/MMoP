@@ -1,5 +1,5 @@
 # custom config
-DATA="/mnt/shared-storage-user/wangxin2/CLIP/"
+DATA="/path/to/CLIP/"
 TRAINER=AdvCoOp
 
 DATASET=("imagenet")
@@ -33,7 +33,7 @@ fi
 
 # evaluation
 
-DATA="/mnt/shared-storage-user/wangxin2/CLIP/"
+DATA="/path/to/CLIP/"
 TRAINER=AdvCoOp
 SHOTS=16                        # number of shots (1, 2, 4, 8, 16)
 NCTX=32                         # number of context tokens

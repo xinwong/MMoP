@@ -5,7 +5,7 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-DATA="/mnt/shared-storage-user/wangxin2/CLIP/"
+DATA="/path/to/CLIP/"
 TRAINER=AdvCoOp
 CFG=vit_b16_c2_ep100_batch32
 CTP=end

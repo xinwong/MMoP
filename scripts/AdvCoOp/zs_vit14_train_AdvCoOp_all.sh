@@ -1,5 +1,5 @@
 # custom config
-DATA="/fs-computility/ai-shen/shared/VauAI/wangxin2/CLIP/"
+DATA="/fs-computility/ai-shen/path/to/CLIP/"
 TRAINER=AdvCoOp
 
 DATASETS=("imagenet" "caltech101" "dtd" "eurosat" "oxford_pets" "oxford_flowers" "fgvc_aircraft" "food101" "stanford_cars" "sun397" "ucf101")

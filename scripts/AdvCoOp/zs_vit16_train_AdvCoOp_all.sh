@@ -1,5 +1,5 @@
 # custom config
-DATA="/mnt/shared-storage-user/wangxin2/CLIP/"
+DATA="/path/to/CLIP/"
 TRAINER=AdvCoOp
 
 DATASETS=("imagenet" "caltech101" "dtd" "eurosat" "oxford_pets" "oxford_flowers" "fgvc_aircraft" "food101" "stanford_cars" "sun397" "ucf101")

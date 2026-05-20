@@ -1,5 +1,5 @@
 # custom config
-DATA="/mnt/shared-storage-user/wangxin2/CLIP/"
+DATA="/path/to/CLIP/"
 TRAINER=MoEAdvMaPLe
 
 DATASET=("imagenet")
@@ -10,7 +10,7 @@ SHOTS=16
 
 
 
-DIR=./output2025/train/${DATASET}/${TRAINER}/${CFG}_${SHOTS}shots/seed${SEED}
+DIR=./output/train/${DATASET}/${TRAINER}/${CFG}_${SHOTS}shots/seed${SEED}
 if [ -d "$DIR" ]; then
     echo "Results are available in ${DIR}."
 else
@@ -30,7 +30,7 @@ fi
 
 # evaluation
 
-DATA="/mnt/shared-storage-user/wangxin2/CLIP/"
+DATA="/path/to/CLIP/"
 TRAINER=MoEAdvMaPLe
 
 DATASETS=("imagenet" "caltech101" "dtd" "eurosat" "oxford_pets" "oxford_flowers" "fgvc_aircraft" "food101" "stanford_cars" "sun397" "ucf101")
@@ -44,7 +44,7 @@ SHOTS=16
 for ATTACK in "${ATTACKS[@]}"; do
     for DATASET in "${DATASETS[@]}"; do
         for EPOCH in "${EPOCHS[@]}"; do
-            DIR=/mnt/shared-storage-user/evoagi-share/xinwang/TAPT/output2025/evaluation/${ATTACK}/${TRAINER}/${CFG}_${SHOTS}shots/${DATASET}/seed${SEED}/${EPOCH}
+            DIR=./output/evaluation/${ATTACK}/${TRAINER}/${CFG}_${SHOTS}shots/${DATASET}/seed${SEED}/${EPOCH}
             if [ -d "$DIR" ]; then
                 echo "Results are available in ${DIR}. Skip this job"
             else
@@ -57,7 +57,7 @@ for ATTACK in "${ATTACKS[@]}"; do
                 --dataset-config-file configs/datasets/${DATASET}.yaml \
                 --config-file configs/trainers/${TRAINER}/${CFG}.yaml \
                 --output-dir ${DIR} \
-                --model-dir ./output2025/train/imagenet/${TRAINER}/${CFG}_${SHOTS}shots/seed${SEED} \
+                --model-dir ./output/train/imagenet/${TRAINER}/${CFG}_${SHOTS}shots/seed${SEED} \
                 --load-epoch ${EPOCH} \
                 --attacks ${ATTACK} \
                 --eval-only

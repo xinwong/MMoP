@@ -1,7 +1,7 @@
 
 # evaluation
 
-DATA="/fs-computility/ai-shen/shared/VauAI/wangxin2/CLIP/"
+DATA="/fs-computility/ai-shen/path/to/CLIP/"
 TRAINER=AdvVPT
 
 DATASETS=("imagenet" "caltech101" "dtd" "eurosat" "oxford_pets" "oxford_flowers" "fgvc_aircraft" "food101" "stanford_cars" "sun397" "ucf101")
@@ -40,7 +40,7 @@ done
 
 # evaluation
 
-DATA="/fs-computility/ai-shen/shared/VauAI/wangxin2/CLIP/"
+DATA="/fs-computility/ai-shen/path/to/CLIP/"
 TRAINER=AdvVPT
 
 DATASETS=("imagenet" "caltech101" "dtd" "eurosat" "oxford_pets" "oxford_flowers" "fgvc_aircraft" "food101" "stanford_cars" "sun397" "ucf101")
@@ -66,7 +66,7 @@ for DATASET in "${DATASETS[@]}"; do
             --dataset-config-file configs/datasets/${DATASET}.yaml \
             --config-file configs/trainers/${TRAINER}/${CFG}.yaml \
             --output-dir ${DIR} \
-            --model-dir ./output2025/train/imagenet/${TRAINER}/${CFG}_${SHOTS}shots/seed${SEED} \
+            --model-dir ./output/train/imagenet/${TRAINER}/${CFG}_${SHOTS}shots/seed${SEED} \
             --load-epoch ${EPOCH} \
             --attacks ${attacks} \
             --eval-only

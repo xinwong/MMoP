@@ -1,6 +1,6 @@
 # evaluation
 
-DATA="/fs-computility/ai-shen/shared/VauAI/wangxin2/CLIP/"
+DATA="/fs-computility/ai-shen/path/to/CLIP/"
 TRAINER=AdvCoOp
 SHOTS=16                        # number of shots (1, 2, 4, 8, 16)
 NCTX=32                         # number of context tokens
