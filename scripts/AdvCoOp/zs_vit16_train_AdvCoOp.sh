@@ -48,7 +48,7 @@ EPOCHS=(100)  # ($(seq 10 10 100)) Generate sequence from 0 to 100 with steps of
 
 for DATASET in "${DATASETS[@]}"; do
     for EPOCH in "${EPOCHS[@]}"; do
-        DIR=DATA=/path/to/output/evaluation/${TRAINER}/${CFG}_${SHOTS}shots/${DATASET}/seed${SEED}/${EPOCH}
+        DIR=./output/evaluation/${TRAINER}/${CFG}_${SHOTS}shots/${DATASET}/seed${SEED}/${EPOCH}
         if [ -d "$DIR" ]; then
             echo "Results are available in ${DIR}. Skip this job"
         else
