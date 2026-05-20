@@ -339,11 +339,6 @@ class MoEAdvIVLP(TrainerX):
             input, label = self.parse_batch_test(batch)
             if attack == 'auto':
                 adv_input = attacker.run_standard_evaluation(input, label)
-            elif attack == "cwa" or attack == "ags":
-                black_box_eps = 8.0 / 255
-                perturbations = attacker(input, label)
-                noise = torch.clamp(perturbations, -black_box_eps, black_box_eps)
-                adv_input = torch.clamp(input + noise, 0, 1)
             else:
                 adv_input = attacker(input, label)
             with torch.no_grad():

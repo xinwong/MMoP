@@ -260,46 +260,9 @@ class AdvCoOp(TrainerX):
                         steps=steps)
         elif attack == 'cw':
             attacker = torchattacks.CW(self.model)
-        elif attack == 'cwa':
-            # 使用transferattack库进行迁移攻击
-            import transferattack
-            # 获取attack参数
-            model_name = ['resnet18','resnet101', 'densenet121']
-            targeted = False
-            # 创建攻击器
-            attacker = transferattack.load_attack_class(attack)(
-                model_name=model_name, 
-                targeted=targeted
-            )
-            # # 应用攻击生成对抗样本
-            # perturbations = attacker(images, labels)
-            # # 限制扰动并应用
-            # noise = torch.clamp(perturbations, -eps, eps)
-            # images_adv = images + noise
-            # images_adv = torch.clamp(images_adv, 0, 1)
-            
-            # return images_adv
-
-        elif attack == 'ags':
-            # 使用transferattack库进行迁移攻击
-            import transferattack
-            # 获取attack参数
-            model_name = "ags_coco"
-            targeted = False
-            # 创建攻击器
-            attacker = transferattack.load_attack_class(attack)(
-                model_name=model_name, 
-                targeted=targeted
-            )
-            # # 应用攻击生成对抗样本
-            # perturbations = attacker(images, labels)
-            # # 限制扰动并应用
-            # noise = torch.clamp(perturbations, -eps, eps)
-            # images_adv = images + noise
-            # images_adv = torch.clamp(images_adv, 0, 1)
         else:
             raise ValueError(f"Unknown attack: {attack}")
-        
+
         # If inputs were normalized, then
         # attacker.set_normalization_used(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
 
@@ -310,14 +273,6 @@ class AdvCoOp(TrainerX):
             input, label = self.parse_batch_test(batch)
             if attack in {'auto', 'autoattack'}:
                 adv_input = attacker.run_standard_evaluation(input, label)
-            elif attack == "cwa" or attack =="ags":
-                black_box_eps = 8.0/255 
-                # 应用攻击生成对抗样本
-                perturbations = attacker(input, label)
-                # 限制扰动并应用
-                noise = torch.clamp(perturbations, -black_box_eps, black_box_eps)
-                adv_input = input + noise
-                adv_input = torch.clamp(adv_input, 0, 1)
             else:
                 adv_input = attacker(input, label)
             with torch.no_grad():
