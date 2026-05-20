@@ -48,6 +48,34 @@ Here are examples of how to train and evaluate different Multimodal Adversarial 
     ./scripts/AdvCoOp/zs_vit16_train_AdvCoOp.sh
     ```
 
+## MoE Variants
+
+The MoE variants extend each prompt design with a Mixture-of-Experts router. `MoEAdvIVLP` is the canonical scheme and uses alignment-aware soft routing on top of the V-L independent prompts.
+
+*   **MoEAdvIVLP (MoE V-L Independent Prompt):**
+
+    ```bash
+    ./scripts/MoEAdvIVLP/zs_vit16_train_AdvIVLP.sh
+    ```
+
+*   **MoEAdvMaPLe (MoE V-L Joint Prompt):**
+
+    ```bash
+    ./scripts/MoEAdvMaple/zs_vit16_train_AdvMaple.sh
+    ```
+
+*   **MoEAdvVPT (MoE Visual Prompt):**
+
+    ```bash
+    ./scripts/MoEAdvVPT/zs_vit16_train_AdvVPT.sh
+    ```
+
+*   **MoEAdvTP (MoE Textual Prompt):**
+
+    ```bash
+    ./scripts/MoEAdvTP/zs_vit16_train_AdvIVLP.sh
+    ```
+
 # Acknowledgement
 
 This repository is built upon [`MaPLe`](https://github.com/muzairkhattak/multimodal-prompt-learning) and [`CoOp`](https://github.com/KaiyangZhou/CoOp). Thanks for those well-organized codebases.
