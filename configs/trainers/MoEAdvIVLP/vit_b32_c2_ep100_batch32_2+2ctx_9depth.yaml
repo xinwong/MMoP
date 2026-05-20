@@ -3,7 +3,7 @@ DATALOADER:
     BATCH_SIZE: 32
   TEST:
     BATCH_SIZE: 256
-  NUM_WORKERS: 8
+  NUM_WORKERS: 16
 
 INPUT:
   SIZE: (224, 224)
@@ -17,7 +17,7 @@ OPTIM:
   LR: 0.0035
   MAX_EPOCH: 100
   LR_SCHEDULER: "cosine"
-  WARMUP_EPOCH: 1
+  WARMUP_EPOCH: 5
   WARMUP_TYPE: "constant"
   WARMUP_CONS_LR: 1e-5
 
@@ -31,13 +31,31 @@ MODEL:
 
 TRAINER:
   MoEAdvIVLP:
+    # Canonical MoE VLI for ViT-B/32 ("WU5"): WARMUP_EPOCH=5 override on top of the
+    # B/16 C11 recipe. Training still runs 100 epochs; load_epoch=100.
     N_CTX_VISION: 2
     N_CTX_TEXT: 2
     CTX_INIT: "a photo of a"
     PREC: "fp16"
     PROMPT_DEPTH_VISION: 9
     PROMPT_DEPTH_TEXT: 9
-    NUM_EXPERTS: 3
+    NUM_EXPERTS: 5
+    AUX_BALANCE_W: 0.0
+    AUX_DIVERSITY_W: 0.0
+    AUX_BALANCE_W_TARGET: 0.0
+    AUX_DIVERSITY_W_TARGET: 0.0
+    AUX_WARMUP_EPOCHS: 20
+    DELTA_SCALE_INIT: 1.0
+    TRAIN_TAU: True
+    TRAIN_BASE_PROMPT: True
+    GATE_MODE: "token_mean"
+    GATE_HYBRID_LAMBDA: 0.7
+    LR_MULT_GATE: 1.0
+    LR_MULT_SCALE: 1.0
+    ALPHA_MIN: 0.0
+    ALPHA_MAX: 2.0
+    TAU_MIN: 0.7
+    TAU_MAX: 1.3
 
 AT:
   TRAIN:

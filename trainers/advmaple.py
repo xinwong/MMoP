@@ -253,6 +253,13 @@ class AdvMaPLe(TrainerX):
                         eps=eps,
                         alpha=alpha,
                         steps=steps)
+        elif attack == 'ti':
+            attacker = torchattacks.TIFGSM(self.model,
+                        eps=eps,
+                        alpha=alpha,
+                        steps=steps)
+        elif attack == 'cw':
+            attacker = torchattacks.CW(self.model)  
         else:
             raise ValueError(f"Unknown attack: {attack}")
         
@@ -265,7 +272,7 @@ class AdvMaPLe(TrainerX):
         for batch_idx, batch in enumerate(tqdm(self.test_loader)):
             input, label = self.parse_batch_test(batch)
             if attack == 'auto':
-                adv_input = attacker.run_standard_evaluation(input, label)
+                adv_input = attacker.run_standard_evaluation(input, label)   
             else:
                 adv_input = attacker(input, label)
             with torch.no_grad():

@@ -91,6 +91,24 @@ def extend_cfg(cfg):
     """
     from yacs.config import CfgNode as CN
 
+    def add_moe_aware_defaults(node):
+        node.AUX_BALANCE_W = 1e-2
+        node.AUX_DIVERSITY_W = 1e-3
+        node.AUX_BALANCE_W_TARGET = 1e-3
+        node.AUX_DIVERSITY_W_TARGET = 1e-4
+        node.AUX_WARMUP_EPOCHS = 20
+        node.DELTA_SCALE_INIT = 0.1
+        node.TRAIN_TAU = False
+        node.TRAIN_BASE_PROMPT = False
+        node.GATE_MODE = "hybrid"
+        node.GATE_HYBRID_LAMBDA = 0.7
+        node.LR_MULT_GATE = 0.2
+        node.LR_MULT_SCALE = 0.1
+        node.ALPHA_MIN = 0.0
+        node.ALPHA_MAX = 2.0
+        node.TAU_MIN = 0.3
+        node.TAU_MAX = 3.0
+
     # Config for AT
     cfg.AT = CN()
     cfg.AT.TRAIN = CN()
@@ -157,15 +175,16 @@ def extend_cfg(cfg):
     cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
 
     # Config for MoE Adversarial V-L Independent Prompt (MoEAdvIVLP)
+    # Canonical recipe: Aware MoE (C11 @ epoch 80).
     cfg.TRAINER.MoEAdvIVLP = CN()
     cfg.TRAINER.MoEAdvIVLP.N_CTX_VISION = 2  # number of context vectors at the vision branch
     cfg.TRAINER.MoEAdvIVLP.N_CTX_TEXT = 2  # number of context vectors at the language branch
     cfg.TRAINER.MoEAdvIVLP.CTX_INIT = "a photo of a"  # initialization words (only for language prompts)
     cfg.TRAINER.MoEAdvIVLP.PREC = "fp16"  # fp16, fp32, amp
-    # If both variables below are set to 0, 0, will the config will degenerate to COOP model
     cfg.TRAINER.MoEAdvIVLP.PROMPT_DEPTH_VISION = 9 # Max 12, minimum 0, for 0 it will act as shallow MaPLe (J=1)
     cfg.TRAINER.MoEAdvIVLP.PROMPT_DEPTH_TEXT = 9  # Max 12, minimum 0, for 0 it will act as shallow MaPLe (J=1)
     cfg.TRAINER.MoEAdvIVLP.NUM_EXPERTS = 3  # number of experts
+    add_moe_aware_defaults(cfg.TRAINER.MoEAdvIVLP)
     cfg.DATASET.SUBSAMPLE_CLASSES = "all"  # all, base or new
 
 def setup_cfg(args):
@@ -197,6 +216,10 @@ def configure_attack(cfg):
     print("Attack: {}, Test_eps: {}, Test_alpha: {}, Test_steps: {}".format(args.attacks, eps, alpha, steps))
     return eps, alpha, steps
 
+
+def run_clean_only(attack_name):
+    return attack_name in {"", "clean", "none"}
+
 def main(args):
     cfg = setup_cfg(args)
     if cfg.SEED >= 0:
@@ -218,6 +241,9 @@ def main(args):
         print('---------------------------------------------------')
         print('clean acc:')
         trainer.test()
+        if run_clean_only(args.attacks):
+            print("Skip robust evaluation because attacks={}.".format(args.attacks))
+            return
         print('---------------------------------------------------')
         print('robust acc:')
         eps, alpha, steps = configure_attack(cfg)
@@ -230,6 +256,9 @@ def main(args):
         print('---------------------------------------------------')
         print('clean acc:')
         trainer.test()
+        if run_clean_only(args.attacks):
+            print("Skip robust evaluation because attacks={}.".format(args.attacks))
+            return
         print('---------------------------------------------------')
         print('robust acc:')
         eps, alpha, steps = configure_attack(cfg)
@@ -271,7 +300,7 @@ if __name__ == "__main__":
     parser.add_argument("--backbone", type=str, default="", help="name of CNN backbone")
     parser.add_argument("--head", type=str, default="", help="name of head")
     parser.add_argument("--eval-only", action="store_true", help="evaluation only")
-    parser.add_argument("--attacks", type=str, default="pgd", help="name of adversarial attack")
+    parser.add_argument("--attacks", type=str, default="pgd", help="name of adversarial attack or 'clean'")
     parser.add_argument(
         "--model-dir",
         type=str,

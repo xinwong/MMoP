@@ -3,7 +3,7 @@ DATALOADER:
     BATCH_SIZE: 32
   TEST:
     BATCH_SIZE: 256
-  NUM_WORKERS: 8
+  NUM_WORKERS: 16
 
 INPUT:
   SIZE: (224, 224)
@@ -35,7 +35,7 @@ TRAINER:
     CTX_INIT: "a photo of a"
     PREC: "fp16"
     PROMPT_DEPTH_VISION: 9
-    NUM_EXPERTS: 3
+    NUM_EXPERTS: 5
 
 AT:
   TRAIN:

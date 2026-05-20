@@ -220,6 +220,50 @@ class AdvIVLP(TrainerX):
                         eps=eps,
                         alpha=alpha,
                         steps=steps)
+        elif attack == 'ti':
+            attacker = torchattacks.TIFGSM(self.model,
+                        eps=eps,
+                        alpha=alpha,
+                        steps=steps)
+        elif attack == 'cw':
+            attacker = torchattacks.CW(self.model)
+        elif attack == 'cwa':
+            # 使用transferattack库进行迁移攻击
+            import transferattack
+            # 获取attack参数
+            model_name = ['resnet18','resnet101', 'densenet121']
+            targeted = False
+            # 创建攻击器
+            attacker = transferattack.load_attack_class(attack)(
+                model_name=model_name, 
+                targeted=targeted
+            )
+            # # 应用攻击生成对抗样本
+            # perturbations = attacker(images, labels)
+            # # 限制扰动并应用
+            # noise = torch.clamp(perturbations, -eps, eps)
+            # images_adv = images + noise
+            # images_adv = torch.clamp(images_adv, 0, 1)
+            
+            # return images_adv
+
+        elif attack == 'ags':
+            # 使用transferattack库进行迁移攻击
+            import transferattack
+            # 获取attack参数
+            model_name = "ags_coco"
+            targeted = False
+            # 创建攻击器
+            attacker = transferattack.load_attack_class(attack)(
+                model_name=model_name, 
+                targeted=targeted
+            )
+            # # 应用攻击生成对抗样本
+            # perturbations = attacker(images, labels)
+            # # 限制扰动并应用
+            # noise = torch.clamp(perturbations, -eps, eps)
+            # images_adv = images + noise
+            # images_adv = torch.clamp(images_adv, 0, 1)
         else:
             raise ValueError(f"Unknown attack: {attack}")
         
@@ -233,6 +277,14 @@ class AdvIVLP(TrainerX):
             input, label = self.parse_batch_test(batch)
             if attack == 'auto':
                 adv_input = attacker.run_standard_evaluation(input, label)
+            elif attack == "cwa" or attack =="ags":
+                black_box_eps = 8.0/255 
+                # 应用攻击生成对抗样本
+                perturbations = attacker(input, label)
+                # 限制扰动并应用
+                noise = torch.clamp(perturbations, -black_box_eps, black_box_eps)
+                adv_input = input + noise
+                adv_input = torch.clamp(adv_input, 0, 1)            
             else:
                 adv_input = attacker(input, label)
             with torch.no_grad():
@@ -243,9 +295,9 @@ class AdvIVLP(TrainerX):
 
         adv_test_dataset = TensorDataset(self.adv_test_pkl, all_labels)
 
-        torch.save(adv_test_dataset, dataset_save_path)
+        # torch.save(adv_test_dataset, dataset_save_path)
 
-        print(f"Saving to: {dataset_save_path}")
+        # print(f"Saving to: {dataset_save_path}")
 
     @torch.no_grad()
     def test_adv(self, split=None):

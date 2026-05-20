@@ -106,13 +106,14 @@ class CustomCLIP(nn.Module):
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
         self.normalize = transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
+        self.register_buffer("fixed_text_features", self.embeddings.return_fixed_embeddings(), persistent=False)
 
     def forward(self, image, label=None, training=False):
         image = self.normalize(image)
 
         logit_scale = self.logit_scale.exp()
-
-        text_features = self.embeddings.return_fixed_embeddings().cuda()
+        
+        text_features = self.fixed_text_features
         image_features = self.image_encoder(image.type(self.dtype))
 
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
@@ -155,6 +156,13 @@ class AdvVPT(TrainerX):
                         eps=eps,
                         alpha=alpha,
                         steps=steps)
+        elif attack == 'ti':
+            attacker = torchattacks.TIFGSM(self.model,
+                        eps=eps,
+                        alpha=alpha,
+                        steps=steps)
+        elif attack == 'cw':
+            attacker = torchattacks.CW(self.model)
         else:
             raise ValueError(f"Unknown attack: {attack}")
         

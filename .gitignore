@@ -1,0 +1,38 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+.Python
+.eggs/
+build/
+dist/
+
+# IDE / editor
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Training / evaluation outputs (large)
+output/
+output2025/
+output_search/
+output*/
+logs/
+
+# Adversarial-test pickles produced by before_adv_test()
+*.pkl
+
+# Process / job state
+*.pid
+
+# pip typo cruft (e.g. `pip install pkg=10.1` left an empty file named "=10.1")
+=*
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example

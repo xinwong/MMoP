@@ -1,0 +1,70 @@
+DATALOADER:
+  TRAIN_X:
+    BATCH_SIZE: 32
+  TEST:
+    BATCH_SIZE: 256
+  NUM_WORKERS: 16
+
+INPUT:
+  SIZE: (224, 224)
+  INTERPOLATION: "bicubic"
+  PIXEL_MEAN: [0.0, 0.0, 0.0]   # [0.48145466, 0.4578275, 0.40821073]
+  PIXEL_STD: [1.0, 1.0, 1.0]    # [0.26862954, 0.26130258, 0.27577711]
+  TRANSFORMS: ["random_resized_crop", "random_flip", "normalize"]
+
+OPTIM:
+  NAME: "sgd"
+  LR: 0.0035
+  MAX_EPOCH: 100
+  LR_SCHEDULER: "cosine"
+  WARMUP_EPOCH: 10
+  WARMUP_TYPE: "constant"
+  WARMUP_CONS_LR: 1e-5
+
+TRAIN:
+  PRINT_FREQ: 20
+  CHECKPOINT_FREQ: 20
+
+MODEL:
+  BACKBONE:
+    NAME: "ViT-L/14"
+
+TRAINER:
+  MoEAdvIVLP:
+    # Canonical MoE VLI for ViT-L/14 ("L18WU10"): scales prompt depth to 18
+    # (75% of L/14's 24 layers) and uses WARMUP_EPOCH=10. load_epoch=20.
+    N_CTX_VISION: 2
+    N_CTX_TEXT: 2
+    CTX_INIT: "a photo of a"
+    PREC: "fp16"
+    PROMPT_DEPTH_VISION: 18
+    PROMPT_DEPTH_TEXT: 18
+    NUM_EXPERTS: 5
+    AUX_BALANCE_W: 0.0
+    AUX_DIVERSITY_W: 0.0
+    AUX_BALANCE_W_TARGET: 0.0
+    AUX_DIVERSITY_W_TARGET: 0.0
+    AUX_WARMUP_EPOCHS: 20
+    DELTA_SCALE_INIT: 1.0
+    TRAIN_TAU: True
+    TRAIN_BASE_PROMPT: True
+    GATE_MODE: "token_mean"
+    GATE_HYBRID_LAMBDA: 0.7
+    LR_MULT_GATE: 1.0
+    LR_MULT_SCALE: 1.0
+    ALPHA_MIN: 0.0
+    ALPHA_MAX: 2.0
+    TAU_MIN: 0.7
+    TAU_MAX: 1.3
+
+AT:
+  TRAIN:
+    EPS: 1
+    ALPHA: 1
+    STEPS: 2
+    AT_LOSS_TYPE: "adv_half"
+
+  TEST:
+    EPS: 1
+    ALPHA: 1
+    STEPS: 100

@@ -38,8 +38,8 @@ def load_clip_to_cpu(cfg):
 
     except RuntimeError:
         state_dict = torch.load(model_path, map_location="cpu")
-    design_details = { "trainer": "VPT_MoE",
-                    "vision_depth": cfg.TRAINER.AdvVPT.PROMPT_DEPTH_VISION,
+    design_details = {"trainer": "VPT_MoE",
+                      "vision_depth": cfg.TRAINER.AdvVPT.PROMPT_DEPTH_VISION,
                       "vision_ctx": cfg.TRAINER.AdvVPT.N_CTX_VISION,
                       "language_depth": 0,
                       "language_ctx": 0,
@@ -107,13 +107,14 @@ class CustomCLIP(nn.Module):
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
         self.normalize = transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
+        self.register_buffer("fixed_text_features", self.embeddings.return_fixed_embeddings(), persistent=False)
 
     def forward(self, image, label=None, training=False):
         image = self.normalize(image)
 
         logit_scale = self.logit_scale.exp()
 
-        text_features = self.embeddings.return_fixed_embeddings().cuda()
+        text_features = self.fixed_text_features
         image_features = self.image_encoder(image.type(self.dtype))
 
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
@@ -156,43 +157,13 @@ class MoEAdvVPT(TrainerX):
                         eps=eps,
                         alpha=alpha,
                         steps=steps)
-        elif attack == 'cwa':
-            # 使用transferattack库进行迁移攻击
-            import transferattack
-            # 获取attack参数
-            model_name = ['resnet18','resnet101', 'densenet121']
-            targeted = False
-            # 创建攻击器
-            attacker = transferattack.load_attack_class(attack)(
-                model_name=model_name, 
-                targeted=targeted
-            )
-            # # 应用攻击生成对抗样本
-            # perturbations = attacker(images, labels)
-            # # 限制扰动并应用
-            # noise = torch.clamp(perturbations, -eps, eps)
-            # images_adv = images + noise
-            # images_adv = torch.clamp(images_adv, 0, 1)
-            
-            # return images_adv
-
-        elif attack == 'ags':
-            # 使用transferattack库进行迁移攻击
-            import transferattack
-            # 获取attack参数
-            model_name = "ags_coco"
-            targeted = False
-            # 创建攻击器
-            attacker = transferattack.load_attack_class(attack)(
-                model_name=model_name, 
-                targeted=targeted
-            )
-            # # 应用攻击生成对抗样本
-            # perturbations = attacker(images, labels)
-            # # 限制扰动并应用
-            # noise = torch.clamp(perturbations, -eps, eps)
-            # images_adv = images + noise
-            # images_adv = torch.clamp(images_adv, 0, 1)
+        elif attack == 'ti':
+            attacker = torchattacks.TIFGSM(self.model,
+                        eps=eps,
+                        alpha=alpha,
+                        steps=steps)
+        elif attack == 'cw':
+            attacker = torchattacks.CW(self.model)
         else:
             raise ValueError(f"Unknown attack: {attack}")
         
@@ -205,15 +176,7 @@ class MoEAdvVPT(TrainerX):
         for batch_idx, batch in enumerate(tqdm(self.test_loader)):
             input, label = self.parse_batch_test(batch)
             if attack == 'auto':
-                adv_input = attacker.run_standard_evaluation(input, label)
-            elif attack == "cwa" or attack =="ags":
-                black_box_eps = 8.0/255 
-                # 应用攻击生成对抗样本
-                perturbations = attacker(input, label)
-                # 限制扰动并应用
-                noise = torch.clamp(perturbations, -black_box_eps, black_box_eps)
-                adv_input = input + noise
-                adv_input = torch.clamp(adv_input, 0, 1)            
+                adv_input = attacker.run_standard_evaluation(input, label)    
             else:
                 adv_input = attacker(input, label)
             with torch.no_grad():
@@ -222,11 +185,11 @@ class MoEAdvVPT(TrainerX):
                 self.adv_test_pkl[start_idx: end_idx] = adv_input.detach().cpu()
                 all_labels[start_idx: end_idx] = label.detach().cpu()
 
-        # adv_test_dataset = TensorDataset(self.adv_test_pkl, all_labels)
+        adv_test_dataset = TensorDataset(self.adv_test_pkl, all_labels)
 
-        # torch.save(adv_test_dataset, dataset_save_path)
+        torch.save(adv_test_dataset, dataset_save_path)
 
-        # print(f"Saving to: {dataset_save_path}")
+        print(f"Saving to: {dataset_save_path}")
 
     @torch.no_grad()
     def test_adv(self, split=None):

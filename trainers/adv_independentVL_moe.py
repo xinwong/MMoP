@@ -25,25 +25,86 @@ from torchvision import transforms
 
 _tokenizer = _Tokenizer()
 
+MOE_STATE_NAMES = ("expert_prompts", "gate", "tau", "alpha", "base_prompt")
+
+
+def is_moe_state_parameter(name):
+    return any(key in name for key in MOE_STATE_NAMES)
+
+
+def is_trainable_moe_parameter(name, train_tau=True, train_base_prompt=True):
+    if "tau" in name and not train_tau:
+        return False
+    if "base_prompt" in name and not train_base_prompt:
+        return False
+    return is_moe_state_parameter(name)
+
+
+def unwrap_model(model):
+    return model.module if isinstance(model, nn.DataParallel) else model
+
+
+def is_moe_gate_parameter(name):
+    return "gate.weight" in name or "gate.bias" in name
+
+
+def is_moe_scale_parameter(name):
+    return ("alpha" in name) or ("tau" in name)
+
+
+def build_moe_param_groups(model, base_lr, weight_decay, lr_mult_gate, lr_mult_scale):
+    prompt_params = []
+    gate_params = []
+    scale_params = []
+
+    for name, param in model.named_parameters():
+        if not param.requires_grad:
+            continue
+        if is_moe_scale_parameter(name):
+            scale_params.append(param)
+        elif is_moe_gate_parameter(name):
+            gate_params.append(param)
+        else:
+            prompt_params.append(param)
+
+    param_groups = []
+    if prompt_params:
+        param_groups.append({"params": prompt_params, "lr": base_lr, "weight_decay": weight_decay})
+    if gate_params:
+        param_groups.append({"params": gate_params, "lr": base_lr * lr_mult_gate, "weight_decay": weight_decay})
+    if scale_params:
+        param_groups.append({"params": scale_params, "lr": base_lr * lr_mult_scale, "weight_decay": 0.0})
+
+    return param_groups
+
 
 def load_clip_to_cpu(cfg):
+    moe_cfg = cfg.TRAINER.MoEAdvIVLP
     backbone_name = cfg.MODEL.BACKBONE.NAME
     url = clip._MODELS[backbone_name]
     model_path = clip._download(url)
 
     try:
-        # loading JIT archive
         model = torch.jit.load(model_path, map_location="cpu").eval()
         state_dict = None
-
     except RuntimeError:
         state_dict = torch.load(model_path, map_location="cpu")
-    design_details = {"trainer": 'IVLP_MoE',
-                      "vision_depth": cfg.TRAINER.MoEAdvIVLP.PROMPT_DEPTH_VISION,
-                      "language_depth": cfg.TRAINER.MoEAdvIVLP.PROMPT_DEPTH_TEXT, "vision_ctx": cfg.TRAINER.MoEAdvIVLP.N_CTX_VISION,
-                      "language_ctx": cfg.TRAINER.MoEAdvIVLP.N_CTX_TEXT,
-                      "num_experts": cfg.TRAINER.MoEMoEAdvIVLP.NUM_EXPERTS
-                      }
+
+    design_details = {
+        "trainer": "IVLP_MoE",
+        "vision_depth": moe_cfg.PROMPT_DEPTH_VISION,
+        "language_depth": moe_cfg.PROMPT_DEPTH_TEXT,
+        "vision_ctx": moe_cfg.N_CTX_VISION,
+        "language_ctx": moe_cfg.N_CTX_TEXT,
+        "num_experts": moe_cfg.NUM_EXPERTS,
+        "delta_scale_init": moe_cfg.DELTA_SCALE_INIT,
+        "gate_mode": moe_cfg.GATE_MODE,
+        "gate_hybrid_lambda": moe_cfg.GATE_HYBRID_LAMBDA,
+        "alpha_min": moe_cfg.ALPHA_MIN,
+        "alpha_max": moe_cfg.ALPHA_MAX,
+        "tau_min": moe_cfg.TAU_MIN,
+        "tau_max": moe_cfg.TAU_MAX,
+    }
     model = clip.build_model(state_dict or model.state_dict(), design_details)
 
     return model
@@ -60,93 +121,71 @@ class TextEncoder(nn.Module):
 
     def forward(self, prompts, tokenized_prompts):
         x = prompts + self.positional_embedding.type(self.dtype)
-        x = x.permute(1, 0, 2)  # NLD -> LND
+        x = x.permute(1, 0, 2)
         x = self.transformer(x)
-        x = x.permute(1, 0, 2)  # LND -> NLD
+        x = x.permute(1, 0, 2)
         x = self.ln_final(x).type(self.dtype)
-
-        # x.shape = [batch_size, n_ctx, transformer.width]
-        # take features from the eot embedding (eot_token is the highest number in each sequence)
         x = x[torch.arange(x.shape[0]), tokenized_prompts.argmax(dim=-1)] @ self.text_projection
-
         return x
 
 
 class VLPromptLearner(nn.Module):
     def __init__(self, cfg, classnames, clip_model):
         super().__init__()
+        moe_cfg = cfg.TRAINER.MoEAdvIVLP
         n_cls = len(classnames)
-        # Make sure Language depth >= 1
-        assert cfg.TRAINER.MoEAdvIVLP.PROMPT_DEPTH_TEXT >= 1, "In Independent VL prompting, Language prompt depth should be >=1" \
-                                                        "\nPlease use VPT trainer if you want to learn only vision " \
-                                                        "branch  "
-        n_ctx = cfg.TRAINER.MoEAdvIVLP.N_CTX_TEXT
-        ctx_init = cfg.TRAINER.MoEAdvIVLP.CTX_INIT
+        assert moe_cfg.PROMPT_DEPTH_TEXT >= 1, "In Independent VL prompting, Language prompt depth should be >=1\nPlease use VPT trainer if you want to learn only vision branch"
+        n_ctx = moe_cfg.N_CTX_TEXT
+        ctx_init = moe_cfg.CTX_INIT
         dtype = clip_model.dtype
         ctx_dim = clip_model.ln_final.weight.shape[0]
-        vis_dim = clip_model.visual.output_dim
         clip_imsize = clip_model.visual.input_resolution
         cfg_imsize = cfg.INPUT.SIZE[0]
         assert cfg_imsize == clip_imsize, f"cfg_imsize ({cfg_imsize}) must equal to clip_imsize ({clip_imsize})"
 
-        if ctx_init and (n_ctx) <= 4:
-            # use given words to initialize context vectors
+        if ctx_init and n_ctx <= 4:
             ctx_init = ctx_init.replace("_", " ")
-            n_ctx = n_ctx
             prompt = clip.tokenize(ctx_init)
             with torch.no_grad():
                 embedding = clip_model.token_embedding(prompt).type(dtype)
-            ctx_vectors = embedding[0, 1: 1 + n_ctx, :]
+            ctx_vectors = embedding[0, 1:1 + n_ctx, :]
             prompt_prefix = ctx_init
         else:
-            # random initialization
             ctx_vectors = torch.empty(n_ctx, ctx_dim, dtype=dtype)
             nn.init.normal_(ctx_vectors, std=0.02)
             prompt_prefix = " ".join(["X"] * n_ctx)
-        print(f"Adversarial Independent V-L design")
+        print("Adversarial Independent V-L design")
         print(f'Initial text context: "{prompt_prefix}"')
         print(f"Number of context words (tokens) for Language prompting: {n_ctx}")
-        print(f"Number of context words (tokens) for Vision prompting: {cfg.TRAINER.MoEAdvIVLP.N_CTX_VISION}")
+        print(f"Number of context words (tokens) for Vision prompting: {moe_cfg.N_CTX_VISION}")
         self.ctx = nn.Parameter(ctx_vectors)
 
         classnames = [name.replace("_", " ") for name in classnames]
         name_lens = [len(_tokenizer.encode(name)) for name in classnames]
         prompts = [prompt_prefix + " " + name + "." for name in classnames]
 
-        tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts])  # (n_cls, n_tkn)
+        tokenized_prompts = torch.cat([clip.tokenize(p) for p in prompts])
         with torch.no_grad():
             embedding = clip_model.token_embedding(tokenized_prompts).type(dtype)
 
-        # These token vectors will be saved when in save_model(),
-        # but they should be ignored in load_model() as we want to use
-        # those computed using the current class names
-        self.register_buffer("token_prefix", embedding[:, :1, :])  # SOS
-        self.register_buffer("token_suffix", embedding[:, 1 + n_ctx:, :])  # CLS, EOS
+        self.register_buffer("token_prefix", embedding[:, :1, :])
+        self.register_buffer("token_suffix", embedding[:, 1 + n_ctx:, :])
 
         self.n_cls = n_cls
         self.n_ctx = n_ctx
-        self.tokenized_prompts = tokenized_prompts  # torch.Tensor
+        self.tokenized_prompts = tokenized_prompts
         self.name_lens = name_lens
 
     def construct_prompts(self, ctx, prefix, suffix, label=None):
-        # dim0 is either batch_size (during training) or n_cls (during testing)
-        # ctx: context tokens, with shape of (dim0, n_ctx, ctx_dim)
-        # prefix: the sos token, with shape of (n_cls, 1, ctx_dim)
-        # suffix: remaining tokens, with shape of (n_cls, *, ctx_dim)
-
         if label is not None:
             prefix = prefix[label]
             suffix = suffix[label]
 
-        prompts = torch.cat(
-            [
-                prefix,  # (dim0, 1, dim)
-                ctx,  # (dim0, n_ctx, dim)
-                suffix,  # (dim0, *, dim)
-            ],
-            dim=1,
-        )
-
+        prompts = torch.cat([
+            prefix,
+            ctx,
+            suffix,
+        ], dim=1)
         return prompts
 
     def forward(self):
@@ -157,20 +196,89 @@ class VLPromptLearner(nn.Module):
         prefix = self.token_prefix
         suffix = self.token_suffix
         prompts = self.construct_prompts(ctx, prefix, suffix)
-
         return prompts
 
 
 class CustomCLIP(nn.Module):
     def __init__(self, cfg, classnames, clip_model):
         super().__init__()
+        self.moe_cfg = cfg.TRAINER.MoEAdvIVLP
         self.prompt_learner = VLPromptLearner(cfg, classnames, clip_model)
         self.tokenized_prompts = self.prompt_learner.tokenized_prompts
         self.image_encoder = clip_model.visual
         self.text_encoder = TextEncoder(clip_model)
         self.logit_scale = clip_model.logit_scale
         self.dtype = clip_model.dtype
-        self.normalize = transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
+        self.moe_aux_loss_scale = 1.0
+        self.normalize = transforms.Normalize(
+            mean=[0.48145466, 0.4578275, 0.40821073],
+            std=[0.26862954, 0.26130258, 0.27577711],
+        )
+
+    def compute_moe_aux_components(self):
+        total_balance = self.logit_scale.new_tensor(0.0)
+        total_diversity = self.logit_scale.new_tensor(0.0)
+        for transformer in (self.image_encoder.transformer, self.text_encoder.transformer):
+            if hasattr(transformer, "moe_aux_losses"):
+                balance, diversity = transformer.moe_aux_losses()
+                total_balance = total_balance + balance
+                total_diversity = total_diversity + diversity
+        return total_balance, total_diversity
+
+    def compute_moe_aux_loss(self):
+        total_balance, total_diversity = self.compute_moe_aux_components()
+        balance_w = getattr(self.moe_cfg, "AUX_BALANCE_W_TARGET", self.moe_cfg.AUX_BALANCE_W)
+        diversity_w = getattr(self.moe_cfg, "AUX_DIVERSITY_W_TARGET", self.moe_cfg.AUX_DIVERSITY_W)
+        return self.moe_aux_loss_scale * (balance_w * total_balance + diversity_w * total_diversity)
+
+    def set_moe_aux_loss_scale(self, scale):
+        self.moe_aux_loss_scale = float(scale)
+
+    def compute_moe_diagnostics(self):
+        zero = self.logit_scale.new_tensor(0.0).float()
+        alpha_values = []
+        tau_values = []
+        gate_entropies = []
+
+        for module in self.modules():
+            if hasattr(module, "alpha") and hasattr(module, "_bounded_scale"):
+                alpha = module._bounded_scale(
+                    module.alpha,
+                    getattr(module, "alpha_min", None),
+                    getattr(module, "alpha_max", None),
+                )
+                alpha_values.append(alpha.detach().float().mean())
+
+            if hasattr(module, "tau") and hasattr(module, "_bounded_scale"):
+                tau = module._bounded_scale(
+                    module.tau,
+                    getattr(module, "tau_min", None),
+                    getattr(module, "tau_max", None),
+                )
+                tau_values.append(tau.detach().float().mean())
+
+            gate_weights = getattr(module, "_last_gate_weights", None)
+            if gate_weights is None or gate_weights.numel() == 0:
+                continue
+
+            probs = gate_weights.detach().float().clamp_min(1e-12)
+            entropy = -(probs * probs.log()).sum(dim=-1)
+            if probs.shape[-1] > 1:
+                entropy = entropy / math.log(probs.shape[-1])
+            gate_entropies.append(entropy.mean())
+
+        total_balance, total_diversity = self.compute_moe_aux_components()
+
+        def mean_or_zero(values):
+            return torch.stack(values).mean() if values else zero
+
+        return {
+            "alpha_mean": mean_or_zero(alpha_values),
+            "tau_mean": mean_or_zero(tau_values),
+            "gate_entropy": mean_or_zero(gate_entropies),
+            "aux_balance": total_balance.detach().float(),
+            "aux_diversity": total_diversity.detach().float(),
+        }
 
     def forward(self, image, label=None):
         image = self.normalize(image)
@@ -180,6 +288,8 @@ class CustomCLIP(nn.Module):
 
         prompts = self.prompt_learner()
         text_features = self.text_encoder(prompts, tokenized_prompts)
+        if image.shape[0] == 0:
+            return text_features.new_empty((0, text_features.shape[0]))
         image_features = self.image_encoder(image.type(self.dtype))
 
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
@@ -187,7 +297,7 @@ class CustomCLIP(nn.Module):
         logits = logit_scale * image_features @ text_features.t()
 
         if self.prompt_learner.training:
-            return F.cross_entropy(logits, label)
+            return F.cross_entropy(logits, label) + self.compute_moe_aux_loss()
 
         return logits
 
@@ -208,62 +318,19 @@ class MoEAdvIVLP(TrainerX):
         if os.path.isfile(dataset_save_path):
             self.adv_test_pkl, _ = torch.load(dataset_save_path).tensors
             return
-        
+
         if attack == 'auto':
             attacker = AutoAttack(self.model, norm='Linf', eps=eps, version='standard')
         elif attack == 'pgd':
-            attacker = torchattacks.PGD(self.model,
-                        eps=eps,
-                        alpha=alpha,
-                        steps=steps,
-                        random_start=True)
+            attacker = torchattacks.PGD(self.model, eps=eps, alpha=alpha, steps=steps, random_start=True)
         elif attack == 'di':
-            attacker = torchattacks.DIFGSM(self.model,
-                        eps=eps,
-                        alpha=alpha,
-                        steps=steps)
-        elif attack == 'cwa':
-            # 使用transferattack库进行迁移攻击
-            import transferattack
-            # 获取attack参数
-            model_name = ['resnet18','resnet101', 'densenet121']
-            targeted = False
-            # 创建攻击器
-            attacker = transferattack.load_attack_class(attack)(
-                model_name=model_name, 
-                targeted=targeted
-            )
-            # # 应用攻击生成对抗样本
-            # perturbations = attacker(images, labels)
-            # # 限制扰动并应用
-            # noise = torch.clamp(perturbations, -eps, eps)
-            # images_adv = images + noise
-            # images_adv = torch.clamp(images_adv, 0, 1)
-            
-            # return images_adv
-
-        elif attack == 'ags':
-            # 使用transferattack库进行迁移攻击
-            import transferattack
-            # 获取attack参数
-            model_name = "ags_coco"
-            targeted = False
-            # 创建攻击器
-            attacker = transferattack.load_attack_class(attack)(
-                model_name=model_name, 
-                targeted=targeted
-            )
-            # # 应用攻击生成对抗样本
-            # perturbations = attacker(images, labels)
-            # # 限制扰动并应用
-            # noise = torch.clamp(perturbations, -eps, eps)
-            # images_adv = images + noise
-            # images_adv = torch.clamp(images_adv, 0, 1)
+            attacker = torchattacks.DIFGSM(self.model, eps=eps, alpha=alpha, steps=steps)
+        elif attack == 'ti':
+            attacker = torchattacks.TIFGSM(self.model, eps=eps, alpha=alpha, steps=steps)
+        elif attack == 'cw':
+            attacker = torchattacks.CW(self.model)
         else:
             raise ValueError(f"Unknown attack: {attack}")
-        
-        # If inputs were normalized, then
-        # attacker.set_normalization_used(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
 
         self.adv_test_pkl = torch.empty(size=[len(self.test_loader.dataset), 3, 224, 224])
         all_labels = torch.empty(size=[len(self.test_loader.dataset)])
@@ -272,31 +339,25 @@ class MoEAdvIVLP(TrainerX):
             input, label = self.parse_batch_test(batch)
             if attack == 'auto':
                 adv_input = attacker.run_standard_evaluation(input, label)
-            elif attack == "cwa" or attack =="ags":
-                black_box_eps = 8.0/255 
-                # 应用攻击生成对抗样本
+            elif attack == "cwa" or attack == "ags":
+                black_box_eps = 8.0 / 255
                 perturbations = attacker(input, label)
-                # 限制扰动并应用
                 noise = torch.clamp(perturbations, -black_box_eps, black_box_eps)
-                adv_input = input + noise
-                adv_input = torch.clamp(adv_input, 0, 1)            
+                adv_input = torch.clamp(input + noise, 0, 1)
             else:
                 adv_input = attacker(input, label)
             with torch.no_grad():
                 start_idx = batch_idx * self.test_loader.batch_size
                 end_idx = start_idx + input.size(0)
-                self.adv_test_pkl[start_idx: end_idx] = adv_input.detach().cpu()
-                all_labels[start_idx: end_idx] = label.detach().cpu()
+                self.adv_test_pkl[start_idx:end_idx] = adv_input.detach().cpu()
+                all_labels[start_idx:end_idx] = label.detach().cpu()
 
-        # adv_test_dataset = TensorDataset(self.adv_test_pkl, all_labels)
-
-        # torch.save(adv_test_dataset, dataset_save_path)
-
-        # print(f"Saving to: {dataset_save_path}")
+        adv_test_dataset = TensorDataset(self.adv_test_pkl, all_labels)
+        torch.save(adv_test_dataset, dataset_save_path)
+        print(f"Saving to: {dataset_save_path}")
 
     @torch.no_grad()
     def test_adv(self, split=None):
-        """A generic testing pipeline."""
         self.set_model_mode("eval")
         self.evaluator.reset()
 
@@ -306,15 +367,15 @@ class MoEAdvIVLP(TrainerX):
         if split == "val" and self.val_loader is not None:
             data_loader = self.val_loader
         else:
-            split = "test"  # in case val_loader is None
+            split = "test"
             data_loader = self.test_loader
 
         array_to_pkl = self.adv_test_pkl
         print(f"Evaluate on the *{split}* set")
-        
+
         for batch_idx, batch in enumerate(tqdm(data_loader)):
             _, label = self.parse_batch_test(batch)
-            adv_input = array_to_pkl[batch_idx * data_loader.batch_size: (batch_idx + 1) * data_loader.batch_size]
+            adv_input = array_to_pkl[batch_idx * data_loader.batch_size:(batch_idx + 1) * data_loader.batch_size]
             adv_output = self.model_inference(adv_input.to(label.device))
             self.evaluator.process(adv_output, label)
 
@@ -329,6 +390,23 @@ class MoEAdvIVLP(TrainerX):
     def check_cfg(self, cfg):
         assert cfg.TRAINER.MoEAdvIVLP.PREC in ["fp16", "fp32", "amp"]
 
+    def get_moe_aux_loss_scale(self):
+        moe_cfg = self.cfg.TRAINER.MoEAdvIVLP
+        warmup_epochs = max(int(getattr(moe_cfg, "AUX_WARMUP_EPOCHS", 1)), 1)
+        current_epoch = getattr(self, "epoch", 0) + 1
+        return min(1.0, current_epoch / warmup_epochs)
+
+    def build_moe_optimizer(self, base_lr):
+        moe_cfg = self.cfg.TRAINER.MoEAdvIVLP
+        param_groups = build_moe_param_groups(
+            self.model,
+            base_lr=base_lr,
+            weight_decay=self.cfg.OPTIM.WEIGHT_DECAY,
+            lr_mult_gate=moe_cfg.LR_MULT_GATE,
+            lr_mult_scale=moe_cfg.LR_MULT_SCALE,
+        )
+        return build_optimizer(self.model, self.cfg.OPTIM, param_groups=param_groups)
+
     def build_model(self):
         cfg = self.cfg
         classnames = self.dm.dataset.classnames
@@ -336,27 +414,21 @@ class MoEAdvIVLP(TrainerX):
         print(f"Loading CLIP (backbone: {cfg.MODEL.BACKBONE.NAME})")
         clip_model = load_clip_to_cpu(cfg)
 
-        if cfg.TRAINER.MoEAdvIVLP.PREC == "fp32" or cfg.TRAINER.MoEAdvIVLP.PREC == "amp":
-            # CLIP's default precision is fp16
+        if cfg.TRAINER.MoEAdvIVLP.PREC in ["fp32", "amp"]:
             clip_model.float()
 
         print("Building custom CLIP")
         self.model = CustomCLIP(cfg, classnames, clip_model)
 
         print("Turning off gradients in both the image and the text encoder")
-        # name_to_update = "prompt_learner"
-        names_to_update = ["prompt_learner", "expert_prompts", "gate"] # Names of parameters to be updated. We need to train the MoE layers.
-
+        train_tau = cfg.TRAINER.MoEAdvIVLP.TRAIN_TAU
+        train_base_prompt = cfg.TRAINER.MoEAdvIVLP.TRAIN_BASE_PROMPT
         for name, param in self.model.named_parameters():
-            # if name_to_update not in name:
-            if not any(key in name for key in names_to_update):
-                # Make sure that VPT prompts are updated
-                if "VPT" in name:
-                    param.requires_grad_(True)
-                else:
-                    param.requires_grad_(False)
+            if "prompt_learner" in name or "VPT" in name or is_trainable_moe_parameter(name, train_tau, train_base_prompt):
+                param.requires_grad_(True)
+            else:
+                param.requires_grad_(False)
 
-        # Double check
         enabled = set()
         for name, param in self.model.named_parameters():
             if param.requires_grad:
@@ -367,15 +439,12 @@ class MoEAdvIVLP(TrainerX):
             load_pretrained_weights(self.model, cfg.MODEL.INIT_WEIGHTS)
 
         self.model.to(self.device)
-        # NOTE: only give prompt_learner to the optimizer
-        self.optim = build_optimizer(self.model, cfg.OPTIM)
+        self.optim = self.build_moe_optimizer(cfg.OPTIM.LR)
         self.sched = build_lr_scheduler(self.optim, cfg.OPTIM)
         self.register_model("VLPromptLearner", self.model, self.optim, self.sched)
 
         self.scaler = GradScaler() if cfg.TRAINER.MoEAdvIVLP.PREC == "amp" else None
 
-        # Note that multi-gpu training could be slow because CLIP's size is
-        # big, which slows down the copy operation in DataParallel
         device_count = torch.cuda.device_count()
         if device_count > 1:
             print(f"Multiple GPUs detected (n_gpus={device_count}), use all of them!")
@@ -384,30 +453,26 @@ class MoEAdvIVLP(TrainerX):
     def forward_backward(self, batch):
         image, label = self.parse_batch_train(batch)
 
-        model  = self.model
-        optim  = self.optim
+        model = self.model
+        optim = self.optim
         scaler = self.scaler
+        unwrap_model(model).set_moe_aux_loss_scale(self.get_moe_aux_loss_scale())
 
-        eps    = self.cfg.AT.TRAIN.EPS / 255.0
-        alpha  = self.cfg.AT.TRAIN.ALPHA / 255.0
-        steps  = self.cfg.AT.TRAIN.STEPS
+        eps = self.cfg.AT.TRAIN.EPS / 255.0
+        alpha = self.cfg.AT.TRAIN.ALPHA / 255.0
+        steps = self.cfg.AT.TRAIN.STEPS
         loss_type = self.cfg.AT.TRAIN.AT_LOSS_TYPE
 
-        attacker = torchattacks.PGD(self.model,
-                                    eps=eps,
-                                    alpha=alpha,
-                                    steps=steps,
-                                    random_start=True)
-        # attacker.set_normalization_used(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711]) # If inputs were normalized, then
+        attacker = torchattacks.PGD(self.model, eps=eps, alpha=alpha, steps=steps, random_start=True)
 
         N = image.size(0)
         if loss_type == "clean":
             com_images = image
         elif loss_type == "adv_full":
-            adv_image  = attacker(image, label)
+            adv_image = attacker(image, label)
             com_images = adv_image
         elif loss_type == "adv_half":
-            adv_image  = attacker(image[N//2:], label[N//2:])
+            adv_image = attacker(image[N//2:], label[N//2:])
             com_images = torch.cat([image[:N//2], adv_image], dim=0)
         else:
             raise ValueError(f"Invalid loss type: {loss_type}")
@@ -426,9 +491,13 @@ class MoEAdvIVLP(TrainerX):
             loss.backward()
             optim.step()
 
+        diagnostics = unwrap_model(model).compute_moe_diagnostics()
         loss_summary = {"loss": loss.item()}
+        loss_summary.update({name: value.item() for name, value in diagnostics.items()})
 
         if (self.batch_idx + 1) == self.num_batches:
+            for name, value in diagnostics.items():
+                self.write_scalar(f"train/{name}", value.item(), self.epoch)
             self.update_lr()
 
         return loss_summary
@@ -446,8 +515,6 @@ class MoEAdvIVLP(TrainerX):
             return
 
         names = self.get_model_names()
-
-        # By default, the best model is loaded
         model_file = "model-best.pth.tar"
 
         if epoch is not None:
@@ -463,13 +530,11 @@ class MoEAdvIVLP(TrainerX):
             state_dict = checkpoint["state_dict"]
             epoch = checkpoint["epoch"]
 
-            # Ignore fixed token vectors
             if "prompt_learner.token_prefix" in state_dict:
                 del state_dict["prompt_learner.token_prefix"]
 
             if "prompt_learner.token_suffix" in state_dict:
                 del state_dict["prompt_learner.token_suffix"]
 
-            print("Loading weights to {} " 'from "{}" (epoch = {})'.format(name, model_path, epoch))
-            # set strict=False
+            print("Loading weights to {} ".format(name) + 'from "{}" (epoch = {})'.format(model_path, epoch))
             self._models[name].load_state_dict(state_dict, strict=False)

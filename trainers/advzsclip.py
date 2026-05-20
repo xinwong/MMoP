@@ -33,29 +33,29 @@ CUSTOM_TEMPLATES = {
     "ImageNetR": "a photo of a {}.",
 }
 
-def load_clip_to_cpu_TeCoA(cfg):
-    backbone_name = cfg.MODEL.BACKBONE.NAME
-    url = clip._MODELS[backbone_name]
-    model_path = clip._download(url)
+# def load_clip_to_cpu_TeCoA(cfg):
+#     backbone_name = cfg.MODEL.BACKBONE.NAME
+#     url = clip._MODELS[backbone_name]
+#     model_path = clip._download(url)
 
-    try:
-        # loading JIT archive
-        model = torch.jit.load(model_path, map_location="cpu").eval()
-        state_dict = None
+#     try:
+#         # loading JIT archive
+#         model = torch.jit.load(model_path, map_location="cpu").eval()
+#         state_dict = None
 
-    except RuntimeError:
-        state_dict = torch.load(model_path, map_location="cpu")
+#     except RuntimeError:
+#         state_dict = torch.load(model_path, map_location="cpu")
 
-    TeCoA_state_dict = torch.load("/path/to/TeCoAmodel_best.pth.tar", map_location="cpu")
-    model.visual.load_state_dict(TeCoA_state_dict['vision_encoder_state_dict'], strict=False)
+#     TeCoA_state_dict = torch.load("/path/to/TeCoAmodel_best.pth.tar", map_location="cpu")
+#     model.visual.load_state_dict(TeCoA_state_dict['vision_encoder_state_dict'], strict=False)
 
-    design_details = {"trainer": 'CoOp',
-                      "vision_depth": 0,
-                      "language_depth": 0, "vision_ctx": 0,
-                      "language_ctx": 0}
-    model = clip.build_model(state_dict or model.state_dict(), design_details)
+#     design_details = {"trainer": 'CoOp',
+#                       "vision_depth": 0,
+#                       "language_depth": 0, "vision_ctx": 0,
+#                       "language_ctx": 0}
+#     model = clip.build_model(state_dict or model.state_dict(), design_details)
 
-    return model
+#     return model
 
 
 class CLIPWrapper(nn.Module):
@@ -63,14 +63,15 @@ class CLIPWrapper(nn.Module):
         super().__init__()
         self.clip_model = clip_model
         self.text_features = text_features
-        self.logit_scale = clip_model.logit_scale.exp()
+        # self.logit_scale = clip_model.logit_scale.exp()
         self.normalize = transforms.Normalize(mean=[0.48145466, 0.4578275, 0.40821073], std=[0.26862954, 0.26130258, 0.27577711])
 
     def forward(self, image):
         image = self.normalize(image)
         image_features = self.clip_model.encode_image(image)
         image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-        logits = self.logit_scale * image_features @ self.text_features.t()
+        logit_scale = self.clip_model.logit_scale.exp()
+        logits = logit_scale * image_features @ self.text_features.t()
         return logits
 
 
@@ -85,7 +86,8 @@ class ZeroshotCLIP(TrainerX):
         
         print(f"Loading CLIP (backbone: {cfg.MODEL.BACKBONE.NAME})")
         if TeCoA:
-            clip_model = load_clip_to_cpu_TeCoA(cfg)
+            # clip_model = load_clip_to_cpu_TeCoA(cfg)
+            raise NotImplementedError("TeCoA is not implemented")
         else:
             clip_model = load_clip_to_cpu(cfg)
         clip_model.to(self.device)
@@ -133,6 +135,13 @@ class ZeroshotCLIP(TrainerX):
                         eps=eps,
                         alpha=alpha,
                         steps=steps)
+        elif attack == 'ti':
+            attacker = torchattacks.TIFGSM(self.model,
+                        eps=eps,
+                        alpha=alpha,
+                        steps=steps)
+        elif attack == 'cw':
+            attacker = torchattacks.CW(self.model)
         else:
             raise ValueError(f"Unknown attack: {attack}")
         
@@ -152,6 +161,39 @@ class ZeroshotCLIP(TrainerX):
                 self.adv_test_pkl[batch_idx * self.test_loader.batch_size: (batch_idx + 1) * self.test_loader.batch_size] = adv_input.detach().cpu()
 
 
+    @torch.no_grad()
+    def test_adv(self, split=None):
+        """A generic testing pipeline."""
+        self.set_model_mode("eval")
+        self.evaluator.reset()
+
+        if split is None:
+            split = self.cfg.TEST.SPLIT
+
+        if split == "val" and self.val_loader is not None:
+            data_loader = self.val_loader
+        else:
+            split = "test"  # in case val_loader is None
+            data_loader = self.test_loader
+
+        array_to_pkl = self.adv_test_pkl
+        print(f"Evaluate on the *{split}* set")
+        
+        for batch_idx, batch in enumerate(tqdm(data_loader)):
+            _, label = self.parse_batch_test(batch)
+            adv_input = array_to_pkl[batch_idx * data_loader.batch_size: (batch_idx + 1) * data_loader.batch_size]
+            adv_output = self.model_inference(adv_input.to(label.device))
+            self.evaluator.process(adv_output, label)
+
+        results = self.evaluator.evaluate()
+
+        for k, v in results.items():
+            tag = f"{split}/{k}"
+            self.write_scalar(tag, v, self.epoch)
+
+        return list(results.values())[0]
+        
+        
 @TRAINER_REGISTRY.register()
 class ZeroshotCLIP2(ZeroshotCLIP):
     """Prompt ensembling."""
