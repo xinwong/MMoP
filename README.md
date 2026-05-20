@@ -79,3 +79,22 @@ The MoE variants extend each prompt design with a Mixture-of-Experts router. `Mo
 # Acknowledgement
 
 This repository is built upon [`MaPLe`](https://github.com/muzairkhattak/multimodal-prompt-learning) and [`CoOp`](https://github.com/KaiyangZhou/CoOp). Thanks for those well-organized codebases.
+
+# Citation
+
+```
+@inproceedings{wang2025tapt,
+  title={TAPT: Test-Time Adversarial Prompt Tuning for Robust Inference in Vision-Language Models},
+  author={Wang, Xin and Chen, Kai and Zhang, Jiaming and Chen, Jingjing and Ma, Xingjun},
+  booktitle={Proceedings of the Computer Vision and Pattern Recognition Conference},
+  pages={19910--19920},
+  year={2025}
+}
+
+@article{wang2026tame,
+  title={TAME: Test-Time Adversarial Prompt Tuning via Mixture-of-Experts for Vision-Language Models},
+  author={Wang, Xin and Wang, Yixu and Zhang, Jiaming and Wang, Ruofan and Yu, Jiaqi and Chen, Kai and Chen, Jingjing and Ma, Xingjun and Jiang, Yu-Gang},
+  journal={arXiv preprint arXiv:2605.17577},
+  year={2026}
+}
+```
